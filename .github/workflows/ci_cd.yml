@@ -1,0 +1,46 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Lint
+        run: |
+          black --check .
+          flake8 .
+          mypy .
+      - name: Test
+        run: pytest --cov=. --cov-report=xml
+      - name: Coverage badge
+        uses: tj-actions/coverage-badger@v2
+        with:
+          filepath: coverage.xml
+      - name: Vulnerability scan
+        run: trivy fs .
+      - name: Build Docker
+        run: docker build -f Dockerfile.inference -t inference .
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Push to ECR
+        run: |
+          docker tag inference:latest $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/brain-tumor-inference:latest
+          docker push $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/brain-tumor-inference:latest
+      - name: Deploy to ECS
+        run: python scripts/deploy_ecs.py
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          S3_MODEL_BUCKET: ${{ secrets.S3_MODEL_BUCKET }}

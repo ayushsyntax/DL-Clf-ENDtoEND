@@ -1,0 +1,10 @@
+graph TD
+    A[Dataset Download] --> B[Data Pipeline: Ingestion/Validation/Preprocessing]
+    B --> C[Training Pipeline: Build Model/Train/Tune/Eval/MLflow]
+    C --> D[S3 Model Registry]
+    D --> E[Inference Pipeline: Load/Predict]
+    E --> F[FastAPI API: /predict /health]
+    E --> G[Streamlit App: Local UI]
+    H[GitHub Actions CI/CD] --> I[Test/Lint/Build/Push ECR/Deploy ECS]
+    F --> J[ECS Fargate + ALB]
+    K[Monitoring: Prometheus/CloudWatch]
