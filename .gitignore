@@ -1,27 +1,33 @@
+# Secrets
 .env
+
+# Data
 data/
 mlruns/
-artifacts/best_model.keras
+.dvc/
+
+# Artifacts (keep .gitkeep only)
+artifacts/
+!artifacts/.gitkeep
+
+# Large files
+*.h5
+*.weights.h5
+*.keras
+artifacts/tuner/
+artifacts/eval/
+
+# Python
 __pycache__/
-*.pyc
-venv/
-.venv/
-*.jpg
-*.png
-*.jpeg
-*.gif
-*.bmp
-*.tiff
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv_wsl/
+venv_deploy/
+.env
+brain_tumor_mri_classifier.egg-info/
+
+# OS
 .DS_Store
-.ipynb_checkpoints/
-*.log
-artifacts/tuner/
-artifacts/eval/
-brain_tumor_mri_classifier.egg-info/
-*.h5
-*.weights.h5
-artifacts/tuner/
-artifacts/eval/
-brain_tumor_mri_classifier.egg-info/
-*.h5
-*.weights.h5
+Thumbs.db
