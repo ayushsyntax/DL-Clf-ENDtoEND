@@ -1,9 +1,9 @@
 import uvicorn
 import tensorflow as tf
-from fastapi import Depends, FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.api.middleware import logging_middleware, verify_api_key
+from src.api.middleware import logging_middleware
 from src.common.logging import logger, setup_logging
 from src.common.config import settings
 
@@ -26,7 +26,7 @@ async def startup_initialization():
     """
     global inference_engine
     logger.info("FastAPI service lifecycle: STARTUP")
-    model_path = settings.ARTIFACTS_DIR / "best_model.keras"
+    model_path = settings.BASE_DIR / settings.MODEL_PATH
     if model_path.exists():
         try:
             inference_engine = tf.keras.models.load_model(model_path)
@@ -52,15 +52,13 @@ async def get_health_status():
 
 @app.post("/predict")
 async def execute_prediction(
-    uploaded_image: UploadFile = File(...),
-    _auth: str = Depends(verify_api_key)
+    uploaded_image: UploadFile = File(...)
 ):
     """
     Processes an uploaded MRI scan and returns a binary classification.
 
     Args:
         uploaded_image (UploadFile): The JPEG or PNG image to classify.
-        _auth (str): Authenticated API key status.
 
     Returns:
         dict: The classification label and tumor probability.
@@ -89,7 +87,7 @@ async def execute_prediction(
         probability = float(prediction[0][0])
 
         # Read threshold or fallback
-        threshold = getattr(settings, 'INFERENCE_THRESHOLD', 0.1723)
+        threshold = settings.CONFIDENCE_THRESHOLD
 
         if probability >= threshold:
             label = "Tumor"

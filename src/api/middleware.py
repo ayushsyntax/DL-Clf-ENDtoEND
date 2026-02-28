@@ -1,34 +1,6 @@
-from fastapi import HTTPException, Request, Security
-from fastapi.security.api_key import APIKeyHeader
+from fastapi import Request
 
-from src.common.config import settings
 from src.common.logging import logger
-
-API_KEY_HEADER_NAME = "X-API-KEY"
-api_key_schema = APIKeyHeader(name=API_KEY_HEADER_NAME, auto_error=False)
-
-
-async def verify_api_key(api_token: str = Security(api_key_schema)):
-    """
-    Validates that the incoming request contains a legitimate X-API-KEY header.
-
-    Args:
-        api_token (str): The token extracted from the request headers.
-
-    Returns:
-        str: The validated token string.
-
-    Raises:
-        HTTPException: If the token is missing or does not match the configuration.
-    """
-    if api_token == settings.API_KEY:
-        return api_token
-
-    logger.warning("Rejected unauthorized request", provided_token=api_token)
-    raise HTTPException(
-        status_code=403,
-        detail="Security validation failed: invalid API key."
-    )
 
 
 async def logging_middleware(request: Request, call_next_handler):

@@ -1,71 +1,120 @@
-# Brain Tumor MRI Classifier
+# Brain Tumor MRI Classifier — Full Flow & Tech Stack
 
-Production-grade binary classifier for brain tumor MRI scans.
+An end-to-end Machine Learning pipeline and live REST API for classifying Brain Tumor MRIs.
 
-## Project Overview
-- **Goal:** Classify MRI scans into "Tumor" (Glioma, Meningioma, Pituitary) or "No Tumor".
-- **Backbone:** EfficientNetV2-S (ImageNet pretrained).
-- **Stack:** TensorFlow 2.16+, Keras 3.x, MLflow, FastAPI, AWS ECS.
+Here's the complete picture of the project from raw data to live inference.
 
-## Architecture
-See `docs/architecture_diagram.mmd` for details.
+***
 
-### Key Features
-- **Binary Mapping:** Automatically maps 4 Kaggle classes to 2 binary classes.
-- **Data Pipeline:** High-performance `tf.data` pipeline with native augmentation.
-- **Training:** AdamW + Cosine Decay + Warmup, Mixed Precision, Class Weights.
-- **Tracking:** Local MLflow tracking for hyperparameters and metrics.
-- **Inference:** FastAPI service designed for CPU execution on AWS ECS Fargate.
-- **Security:** API Key authentication for the `/predict` endpoint.
-- **Demo:** Local Streamlit app for interactive testing.
+## Full End-to-End Flow
 
-## Getting Started
-
-### 1. Installation
-```bash
-pip install -r requirements.txt
+```
+Kaggle Dataset
+     ↓
+  Training (local, Python/Keras)
+     ↓
+artifacts/best_model.keras
+     ↓
+python upload_model.py → AWS S3
+     ↓
+git push to main
+     ↓
+GitHub Actions (deploy.yml)
+  ├── Pull model from S3
+  ├── Build Docker image
+  ├── Push image to AWS ECR
+  ├── Register new ECS Task Definition
+  ├── Update ECS Service (Fargate)
+  └── Print: Live endpoint: http://<public-ip>:8000
+             ↓
+     FastAPI running on ECS Fargate
+      ├── GET  /health  → 200 OK
+      └── POST /predict → { label, confidence }
+             ↓
+     streamlit run streamlit_app.py (local)
+      └── Upload MRI image → hit live ECS API → show result
 ```
 
-### 2. Environment Setup
-Create a `.env` file based on `.env.example`:
-```bash
-KAGGLE_USERNAME=your_username
-KAGGLE_KEY=your_key
-AWS_ACCESS_KEY_ID=your_id
-AWS_SECRET_ACCESS_KEY=your_secret
-API_KEY=your_auth_key
+***
+
+## Tech Stack
+
+| Layer | Tool | Why |
+|-------|------|-----|
+| **Model** | Keras / TensorFlow | CNN trained on brain MRI dataset |
+| **Dataset** | Kaggle (via API key) | `KAGGLE_USERNAME` + `KAGGLE_KEY` |
+| **Model Storage** | AWS S3 | Model too large for git; versioned in S3 |
+| **API** | FastAPI + Uvicorn | Async, fast, auto Swagger docs at `/docs` |
+| **Containerization** | Docker (`python:3.12-slim`) | Reproducible, portable runtime |
+| **Container Registry** | AWS ECR | Stores Docker image, pulled by ECS |
+| **Compute** | AWS ECS Fargate | Serverless containers — no EC2 to manage |
+| **CI/CD** | GitHub Actions | Push to `main` → full deploy automatically |
+| **Local Testing UI** | Streamlit | Hits live ECS API, shows label + confidence |
+| **Config** | `.env` + `pydantic-settings` | Clean secret management |
+| **Logging** | `structlog` | Structured JSON logs on every request |
+
+***
+
+## Data Flow on a `/predict` Request
+
+```
+User uploads MRI image (Streamlit)
+        ↓
+POST /predict  (multipart/form-data)
+        ↓
+FastAPI receives image bytes
+        ↓
+Preprocessed → resized → normalized
+        ↓
+model.predict() → softmax probabilities
+        ↓
+{ "label": "No Tumor", "confidence": 0.91 }
+        ↓
+Streamlit renders result + progress bar
 ```
 
-### 3. Pipeline Execution
-1. **Download Data:** `python scripts/download_dataset.py`
-2. **Run Training:** `python scripts/run_training.py`
-3. **Upload to S3:** `python scripts/upload_model_to_s3.py`
-4. **Run API:** `python src/api/app.py`
-5. **Run Demo:** `python scripts/run_streamlit.py`
+***
 
-## Deployment
-Automated via GitHub Actions (`.github/workflows/ci_cd.yml`).
-- Builds `Dockerfile.inference`
-- Pushes to Amazon ECR
-- Updates ECS Fargate Service
+## Key Design Decisions
 
-## Evaluation
-Metrics (Accuracy, Precision, Recall, F1, AUC) and Confusion Matrix are saved to `artifacts/evaluation_results.json`.
-Note: Explainability tools (Grad-CAM, SHAP) and monitoring instrumentators (Prometheus) have been removed from this version.
+- **Model in S3, not git** — `.keras` files are hundreds of MBs; S3 is the right store [linkedin](https://www.linkedin.com/posts/rajkumar-mistry-1b8862178_aws-fastapi-python-activity-7370061922685280257-mESr)
+- **Fargate over EC2** — zero server management, pay per task second [linkedin](https://www.linkedin.com/posts/rajkumar-mistry-1b8862178_aws-fastapi-python-activity-7370061922685280257-mESr)
+- **No auth** — public inference API, anyone can hit `/predict` directly
+- **One deploy file** — entire CI/CD lives in `.github/workflows/deploy.yml`, no scripts folder
+- **Streamlit local only** — UI is a dev/demo tool; the production artifact is the API itself
 
-## Final Test Metrics (Threshold-Tuned)
-| Metric | Value |
-|--------|-------|
-| Test AUC | [from eval] |
-| Best Thresh | [X.XXX] |
-| Precision | XX.X% |
-| Recall | XX.X% |
-| F1 | XX.X% |
+***
 
+## Reproduction Steps
 
+1. **Clone repo**
+   ```bash
+   git clone https://github.com/ayushsyntax/DL-Clf-ENDtoEND.git
+   cd DL-Clf-ENDtoEND
+   ```
 
-## Model Card
-- Dataset: 7200 JPEG (imbalanced tumor/no-tumor)
-- AUC: XX.X% test
-- Thresh: Prior recall (med FN costly)
-- Limits: Axial MRI binary class only
+2. **Configure Environment**
+   Copy `.env.example` -> `.env` and fill in your AWS credentials.
+   (This keeps the Kaggle data ingestion environment intact).
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Provide Artifact**
+   Place your trained model locally at `artifacts/best_model.keras`.
+
+4. **Upload to S3**
+   Run the upload script to push your model to your configured S3 bucket.
+   ```bash
+   python upload_model.py
+   ```
+
+5. **Deploy via GitHub Actions**
+   Push to the `main` branch. GitHub Actions will deploy to AWS ECS Fargate automatically.
+
+6. **Test Live Endpoint**
+   Copy the printed Live endpoint URL from GitHub Actions logs into `.env` as `API_URL`.
+   Run the local Streamlit UI to test the live API:
+   ```bash
+   streamlit run streamlit_app.py
+   ```

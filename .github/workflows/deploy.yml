@@ -5,31 +5,94 @@ on:
     branches:
       - main
 
+env:
+  ECS_SERVICE: brain-tumor-service
+  ECS_TASK_FAMILY: brain-tumor-task
+  CONTAINER_NAME: brain-tumor-container
+  NEW_REVISION: ""
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: 2. Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Install Dependencies
+      - name: 3. Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 4. Download model
         run: |
-          pip install -r requirements.txt
+          mkdir -p artifacts
+          aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/models/best_model.keras artifacts/best_model.keras
 
-      - name: Deploy to ECS
+      - name: 5. Build Docker image
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          python scripts/deploy_ecs.py
+          docker build -f infra/Dockerfile -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+
+      - name: 6. Push to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: 7. Register new ECS task definition
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_FAMILY }} --query taskDefinition > task-def.json
+
+          # Update the image URI inline using jq, and strip out fields that cannot be included in register-task-definition
+          jq '.containerDefinitions[0].image = "'"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"'" | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' task-def.json > new-task-def.json
+
+          NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json)
+          NEW_REVISION=$(echo $NEW_TASK_INFO | jq -r '.taskDefinition.revision')
+          echo "NEW_REVISION=$NEW_REVISION" >> $GITHUB_ENV
+
+      - name: 8. Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ secrets.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --task-definition ${{ env.ECS_TASK_FAMILY }}:${{ env.NEW_REVISION }} \
+            --force-new-deployment
+
+      - name: 9. Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ secrets.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }}
+
+      - name: 10. Get public IP
+        run: |
+          TASK_ARN=$(aws ecs list-tasks --cluster ${{ secrets.ECS_CLUSTER }} --service-name ${{ env.ECS_SERVICE }} --desired-status RUNNING --query 'taskArns[0]' --output text)
+
+          if [ "$TASK_ARN" == "None" ] || [ -z "$TASK_ARN" ]; then
+            echo "No running tasks found."
+            exit 1
+          fi
+
+          ENI_ID=$(aws ecs describe-tasks --cluster ${{ secrets.ECS_CLUSTER }} --tasks $TASK_ARN --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
+
+          PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+
+          echo "Live endpoint: http://$PUBLIC_IP:8000"
+          echo "Test with: curl http://$PUBLIC_IP:8000/health"

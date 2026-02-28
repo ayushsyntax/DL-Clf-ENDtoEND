@@ -1,0 +1,36 @@
+{
+  "family": "brain-tumor-inference-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "brain-tumor-container",
+      "image": "${ECR_IMAGE}",
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "CUDA_VISIBLE_DEVICES", "value": "-1"},
+        {"name": "PYTHONPATH", "value": "/app"},
+        {"name": "AWS_REGION", "value": "${AWS_REGION}"},
+        {"name": "AWS_S3_BUCKET", "value": "${AWS_S3_BUCKET}"}
+      ],
+      "essential": true,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/brain-tumor-inference-task",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

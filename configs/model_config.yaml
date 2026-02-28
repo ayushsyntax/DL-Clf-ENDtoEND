@@ -1,0 +1,6 @@
+model:
+  path: artifacts/best_model.keras
+  s3_key: models/best_model.keras
+  input_size: [224, 224]
+  classes: [glioma, meningioma, notumor, pituitary]
+  confidence_threshold: 0.5
