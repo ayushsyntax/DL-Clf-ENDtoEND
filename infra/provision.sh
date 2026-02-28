@@ -66,7 +66,7 @@ aws ecs create-service \
   --task-definition "$TASK_FAMILY" \
   --desired-count 1 \
   --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS//,/ }],assignPublicIp=ENABLED}" \
+  --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],assignPublicIp=ENABLED}" \
   --region "$AWS_REGION"
 
 echo "Provisioning complete! You can now run the GitHub Actions workflow."
