@@ -70,10 +70,15 @@ jobs:
       - name: 8. Update ECS service
         run: |
           aws ecs update-service \
-            --cluster ${{ secrets.ECS_CLUSTER }} \
-            --service ${{ env.ECS_SERVICE }} \
-            --task-definition ${{ env.ECS_TASK_FAMILY }}:${{ env.NEW_REVISION }} \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$ECS_TASK_FAMILY:$NEW_REVISION" \
             --force-new-deployment
+        env:
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: brain-tumor-service
+          ECS_TASK_FAMILY: brain-tumor-inference-task
+          NEW_REVISION: ${{ env.NEW_REVISION }}
 
       - name: 9. Wait for service stability
         run: |
