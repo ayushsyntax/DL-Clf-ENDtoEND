@@ -6,6 +6,7 @@ on:
       - main
 
 env:
+  ECS_CLUSTER: brain-tumor-cluster
   ECS_SERVICE: brain-tumor-service
   ECS_TASK_FAMILY: brain-tumor-inference-task
   CONTAINER_NAME: brain-tumor-container
@@ -75,19 +76,14 @@ jobs:
             --task-definition "$ECS_TASK_FAMILY:$NEW_REVISION" \
             --force-new-deployment
         env:
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: brain-tumor-service
-          ECS_TASK_FAMILY: brain-tumor-inference-task
           NEW_REVISION: ${{ env.NEW_REVISION }}
+
 
       - name: 9. Wait for service stability
         run: |
           aws ecs wait services-stable \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE"
-        env:
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: brain-tumor-service
 
       - name: 10. Get public IP
         run: |
@@ -104,6 +100,3 @@ jobs:
 
           echo "Live endpoint: http://$PUBLIC_IP:8000"
           echo "Test with: curl http://$PUBLIC_IP:8000/health"
-        env:
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: brain-tumor-service

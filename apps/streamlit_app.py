@@ -34,7 +34,10 @@ if uploaded_file is not None:
     if st.button("Predict"):
         with st.spinner("Analyzing scan..."):
             try:
-                files = {"uploaded_image": uploaded_file.getvalue()}
+                # Send as a file tuple to ensure proper multipart/form-data encoding
+                files = {
+                    "uploaded_image": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)
+                }
                 response = requests.post(f"{API_URL}/predict", files=files)
                 if response.status_code == 200:
                     result = response.json()
