@@ -7,7 +7,7 @@ on:
 
 env:
   ECS_SERVICE: brain-tumor-service
-  ECS_TASK_FAMILY: brain-tumor-task
+  ECS_TASK_FAMILY: brain-tumor-inference-task
   CONTAINER_NAME: brain-tumor-container
   NEW_REVISION: ""
 
