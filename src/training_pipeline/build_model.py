@@ -20,7 +20,10 @@ def configure_gpu_memory() -> None:
     """
     physical_gpus = tensorflow.config.list_physical_devices("GPU")
     for gpu_device in physical_gpus:
-        tensorflow.config.experimental.set_memory_growth(gpu_device, True)
+        try:
+            tensorflow.config.experimental.set_memory_growth(gpu_device, True)
+        except RuntimeError:
+            pass
 
     if physical_gpus:
         logger.info("GPU hardware found and memory growth enabled")
@@ -31,13 +34,8 @@ def set_precision_policy() -> None:
 
     Uses mixed float16 on GPU to double training speed.
     """
-    physical_gpus = tensorflow.config.list_physical_devices("GPU")
-    if physical_gpus:
-        keras.mixed_precision.set_global_policy("mixed_float16")
-        logger.info("Precision policy set to mixed_float16")
-    else:
-        keras.mixed_precision.set_global_policy("float32")
-        logger.info("Precision policy set to standard float32")
+    keras.mixed_precision.set_global_policy("mixed_float16")
+    logger.info("Precision policy set to mixed_float16")
 
 
 def create_efficientnet_base(unfreeze_layers: int) -> keras.Model:
@@ -104,7 +102,7 @@ def build_model(hyperparameters: keras_tuner.HyperParameters) -> keras.Model:
     )
     unfreeze_layers = hyperparameters.Int(
         "unfreeze_layers",
-        min_value=0, max_value=50, step=10
+        min_value=0, max_value=20, step=5
     )
 
     base_model = create_efficientnet_base(unfreeze_layers)

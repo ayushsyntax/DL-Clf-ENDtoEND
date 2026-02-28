@@ -52,6 +52,24 @@ class TrackingService:
         """
         return mlflow.start_run(run_name=trial_name)
 
+    def log_trial_run(
+        self,
+        trial_id: str,
+        hyperparameters: dict,
+        val_auc: float
+    ) -> None:
+        """Log an individual hyperparameter tuning trial.
+
+        Args:
+            trial_id (str): Trial identifier.
+            hyperparameters (dict): Trial parameters.
+            val_auc (float): Validation AUC score.
+        """
+        with self.begin_tracking_session(f"trial_{trial_id}") as active_run:
+            mlflow.log_params(hyperparameters)
+            mlflow.log_metric("val_auc", val_auc)
+            logger.info("Trial archived", run_id=active_run.info.run_id, trial_id=trial_id)
+
     def log_experimental_metadata(
         self,
         df: pandas.DataFrame,

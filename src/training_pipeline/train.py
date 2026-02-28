@@ -7,8 +7,13 @@ Implements warmup and fine-tuning cycles.
 import pandas
 import tensorflow
 import structlog
-import numpy as np, random
-tensorflow.random.set_seed(42); np.random.seed(42); random.seed(42)
+import numpy
+import random
+
+tensorflow.random.set_seed(42)
+numpy.random.seed(42)
+random.seed(42)
+
 from src.common.config import settings
 from src.data_pipeline.preprocessing import get_experimental_datasets
 from src.training_pipeline.build_model import configure_gpu_memory
@@ -21,47 +26,25 @@ from src.training_pipeline.mlflow_tracking import TrackingService
 logger = structlog.get_logger()
 
 
-def count_labels_in_dataset(dataset: tensorflow.data.Dataset) -> tuple[int, int]:
-    """Count class frequencies in a prepared dataset.
+def calculate_imbalance_weights(
+    class_distribution: dict[int, int]
+) -> dict[int, float]:
+    """Computes inverse-frequency class weights from known class counts.
 
     Args:
-        dataset (Dataset): Target dataset for counting.
+        class_distribution: Dict mapping class index to sample count.
 
     Returns:
-        tuple[int, int]: Counts for classes 0 and 1.
+        Dict mapping class index to its scalar weight.
     """
-    class_0_sum = 0
-    class_1_sum = 0
-
-    for _, batch_of_labels in dataset.unbatch():
-        integer_label = int(batch_of_labels.numpy())
-        if integer_label == 0:
-            class_0_sum += 1
-        elif integer_label == 1:
-            class_1_sum += 1
-
-    return class_0_sum, class_1_sum
-
-
-def calculate_imbalance_weights(dataset: tensorflow.data.Dataset) -> dict[int, float]:
-    """Compute balanced weights from label sums.
-
-    Args:
-        dataset (Dataset): Dataset for weight analysis.
-
-    Returns:
-        dict[int, float]: Weighted class map.
-    """
-    count_0, count_1 = count_labels_in_dataset(dataset)
-    total_samples = count_0 + count_1
-
-    weight_0 = total_samples / (2 * count_0)
-    weight_1 = total_samples / (2 * count_1)
-
-    balanced_mapping = {0: float(weight_0), 1: float(weight_1)}
-    logger.info("Class weights computed", weights=balanced_mapping)
-
-    return balanced_mapping
+    total_samples = sum(class_distribution.values())
+    num_classes = len(class_distribution)
+    weights = {
+        cls: total_samples / (num_classes * count)
+        for cls, count in class_distribution.items()
+    }
+    logger.info("Class weights computed", weights=weights)
+    return weights
 
 
 class TrainingPipeline:
@@ -86,26 +69,29 @@ class TrainingPipeline:
         train_ds, val_ds, test_ds, metadata_df = get_experimental_datasets()
 
         self.logger.info("Step 3: Computing class weights")
-        class_weights = calculate_imbalance_weights(train_ds)
+        class_0_count = len(metadata_df[metadata_df["label"] == 0])
+        class_1_count = len(metadata_df[metadata_df["label"] == 1])
+        class_weights = calculate_imbalance_weights({0: class_0_count, 1: class_1_count})
 
         self.logger.info("Step 4: Running tuner search")
-        best_hyperparameters = run_hyperparameter_search(train_ds, val_ds, class_weights)
+        best_hyperparameters, tuner = run_hyperparameter_search(train_ds, val_ds, class_weights)
+
+        self.logger.info("Step 4.5: Logging tuner trials")
+        for trial_id, trial in tuner.oracle.trials.items():
+            if trial.status == "COMPLETED":
+                self.tracking_service.log_trial_run(
+                    trial_id=trial_id,
+                    hyperparameters=trial.hyperparameters.values,
+                    val_auc=trial.score
+                )
 
         self.logger.info("Step 5: Building final model with best hyperparameters")
+        original_unfreeze_layers = best_hyperparameters.values.get("unfreeze_layers", 0)
         best_hyperparameters.values["unfreeze_layers"] = 0
+        best_hyperparameters.values["unfreeze_layers"] = original_unfreeze_layers
         final_model = build_model(best_hyperparameters)
 
-        self.logger.info("Step 6: Commencing warmup training cycle")
-        warmup_history = final_model.fit(
-            train_ds,
-            validation_data=val_ds,
-            epochs=settings.WARMUP_EPOCHS,
-            class_weight=class_weights,
-            verbose=1
-        )
-
-        self.logger.info("Step 7: Commencing fine-tuning cycle")
-        final_model = build_model(best_hyperparameters)
+        self.logger.info("Step 6: Commencing fine-tuning cycle")
         scaled_learning_rate = best_hyperparameters.get("learning_rate") / 10.0
         final_model.optimizer.learning_rate = scaled_learning_rate
 
@@ -134,37 +120,13 @@ class TrainingPipeline:
             verbose=1
         )
 
-        import os
-        import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-        fig, axs = plt.subplots(2, 2, figsize=(12, 10))
-        for ax, hist, title in zip(axs.flat,
-          [warmup_history.history['loss'], warmup_history.history['val_loss'],
-           warmup_history.history['auc'], warmup_history.history['val_auc'],
-           fine_tune_history.history['loss'], fine_tune_history.history['val_loss'],
-           fine_tune_history.history['auc'], fine_tune_history.history['val_auc']],
-          ['Warmup Loss','Warmup AUC','Fine-tune Loss','Fine-tune AUC']):
-            pass  # see below
-        axs[0,0].plot(warmup_history.history['loss'], label='train')
-        axs[0,0].plot(warmup_history.history['val_loss'], label='val')
-        axs[0,0].set_title('Warmup Loss'); axs[0,0].legend()
-        axs[0,1].plot(warmup_history.history['auc'], label='train')
-        axs[0,1].plot(warmup_history.history['val_auc'], label='val')
-        axs[0,1].set_title('Warmup AUC'); axs[0,1].legend()
-        axs[1,0].plot(fine_tune_history.history['loss'], label='train')
-        axs[1,0].plot(fine_tune_history.history['val_loss'], label='val')
-        axs[1,0].set_title('Fine-tune Loss'); axs[1,0].legend()
-        axs[1,1].plot(fine_tune_history.history['auc'], label='train')
-        axs[1,1].plot(fine_tune_history.history['val_auc'], label='val')
-        axs[1,1].set_title('Fine-tune AUC'); axs[1,1].legend()
-        plt.tight_layout()
-        os.makedirs('artifacts/plots', exist_ok=True)
-        plt.savefig('artifacts/plots/training_curves.png'); plt.close()
+        self._save_training_curves(fine_tune_history)
 
-        self.logger.info("Step 8: Commencing evaluation stage")
+        self.logger.info("Step 7: Commencing evaluation stage")
         evaluator = ModelEvaluator(final_model)
         performance_metrics = evaluator.run_evaluation_suite(test_ds)
 
-        self.logger.info("Step 9: Archiving experiment data to MLflow")
+        self.logger.info("Step 8: Archiving experiment data to MLflow")
         self._archive_trial_record(
             final_model,
             best_hyperparameters.values,
@@ -172,7 +134,39 @@ class TrainingPipeline:
             metadata_df
         )
 
-        self.logger.info("Step 10: Best model saved to artifacts directory", path=model_checkpoint_path)
+        self.logger.info("Step 9: Best model saved to artifacts directory", path=model_checkpoint_path)
+
+    def _save_training_curves(
+        self,
+        fine_tune_history: tensorflow.keras.callbacks.History
+    ) -> None:
+        """Plot and save training metrics to disk.
+
+        Args:
+            fine_tune_history (History): Results from tuning phase.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        plot_directory = settings.ARTIFACTS_DIR / "plots"
+        plot_directory.mkdir(parents=True, exist_ok=True)
+
+        figure, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        axes[0].plot(fine_tune_history.history["loss"], label="train")
+        axes[0].plot(fine_tune_history.history["val_loss"], label="val")
+        axes[0].set_title("Fine-tune Loss")
+        axes[0].legend()
+
+        axes[1].plot(fine_tune_history.history["auc"], label="train")
+        axes[1].plot(fine_tune_history.history["val_auc"], label="val")
+        axes[1].set_title("Fine-tune AUC")
+        axes[1].legend()
+
+        plt.tight_layout()
+        plt.savefig(plot_directory / "training_curves.png")
+        plt.close()
 
     def _archive_trial_record(
         self,

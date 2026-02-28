@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import boto3
@@ -24,9 +25,12 @@ def upload_trained_model():
         )
         return
 
+    # Read bucket from settings or environment variable
+    bucket_name = os.environ.get("AWS_S3_BUCKET", settings.AWS_S3_BUCKET)
+
     logger.info(
         "Initiating model artifact upload to S3",
-        bucket=settings.AWS_S3_BUCKET,
+        bucket=bucket_name,
         key=settings.MODEL_S3_PATH
     )
 
@@ -34,10 +38,12 @@ def upload_trained_model():
         s3_client = boto3.client('s3')
         s3_client.upload_file(
             str(local_model_path),
-            settings.AWS_S3_BUCKET,
+            bucket_name,
             settings.MODEL_S3_PATH
         )
+        s3_uri = f"s3://{bucket_name}/{settings.MODEL_S3_PATH}"
         logger.info("Artifact upload sequence finalized successfully")
+        print(f"Model successfully uploaded to S3 URI: {s3_uri}")
 
     except Exception as s3_error:
         logger.error("AWS S3 interaction failed", error=str(s3_error))

@@ -7,8 +7,13 @@ Implements early stopping for trial efficiency.
 import keras_tuner
 import tensorflow
 import structlog
-import numpy as np, random
-tensorflow.random.set_seed(42); np.random.seed(42); random.seed(42)
+import numpy
+import random
+
+tensorflow.random.set_seed(42)
+numpy.random.seed(42)
+random.seed(42)
+
 from src.training_pipeline.build_model import build_model
 from src.common.config import settings
 
@@ -19,7 +24,7 @@ def run_hyperparameter_search(
     training_dataset: tensorflow.data.Dataset,
     validation_dataset: tensorflow.data.Dataset,
     class_weights: dict[int, float]
-) -> keras_tuner.HyperParameters:
+) -> tuple[keras_tuner.HyperParameters, keras_tuner.Tuner]:
     """Run a search to discover optimal architecture.
 
     Args:
@@ -28,7 +33,7 @@ def run_hyperparameter_search(
         class_weights (dict): Imbalance correction mapping.
 
     Returns:
-        HyperParameters: Discovered best configuration.
+        tuple[HyperParameters, Tuner]: Discovered best configuration and tuner object.
     """
     logger.info("Initializing Bayesian Optimization loop")
 
@@ -66,4 +71,4 @@ def run_hyperparameter_search(
     logger.info("Best search parameters found",
                 best_values=best_discovered_hyperparameters.values)
 
-    return best_discovered_hyperparameters
+    return best_discovered_hyperparameters, tuner

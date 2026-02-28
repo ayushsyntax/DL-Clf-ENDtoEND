@@ -41,19 +41,18 @@ def apply_training_augmentations(
     image: tensorflow.Tensor,
     label: tensorflow.Tensor
 ) -> tuple[tensorflow.Tensor, tensorflow.Tensor]:
-    """Increase dataset variance during training.
+    """Applies random augmentations to a single training image.
 
     Args:
-        image (Tensor): Input image.
-        label (Tensor): Input label.
+        image: Float32 image tensor of shape (224, 224, 3).
+        label: Binary integer label tensor.
 
     Returns:
-        tuple[Tensor, Tensor]: Augmented image and same label.
+        Tuple of augmented image tensor and unchanged label.
     """
-    image = tensorflow.keras.layers.RandomFlip("horizontal")(image)
-    image = tensorflow.image.random_brightness(image, max_delta=0.2)
-    image = tensorflow.image.random_contrast(image, lower=0.8, upper=1.2)
-
+    image = tensorflow.image.random_flip_left_right(image)
+    image = tensorflow.image.random_brightness(image, max_delta=0.1)
+    image = tensorflow.image.random_contrast(image, lower=0.9, upper=1.1)
     return image, label
 
 
@@ -84,8 +83,7 @@ def create_tensorflow_dataset(
         load_and_preprocess_image,
         num_parallel_calls=tensorflow.data.AUTOTUNE
     )
-
-    dataset = dataset.cache()
+    # dataset = dataset.cache() # Removed due to OOM issue in WSL
 
     if should_augment:
         dataset = dataset.map(
