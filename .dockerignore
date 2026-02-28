@@ -7,13 +7,13 @@ venv/
 env/
 .env
 data/
-artifacts/
+# artifacts/
 mlruns/
 .pytest_cache/
 .mypy_cache/
 .coverage
 htmlcov/
-*.keras
-*.h5
+# *.keras
+# *.h5
 .ipynb_checkpoints/
 keras_tuner/
