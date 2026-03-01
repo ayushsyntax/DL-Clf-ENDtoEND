@@ -1,24 +1,28 @@
-# name: Deploy to ECS
+name: Deploy to ECS
 
-# on:
-#   push:
-#     branches:
-#       - main
+on:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
 
-# env:
-#   ECS_CLUSTER: brain-tumor-cluster
-#   ECS_SERVICE: brain-tumor-service
-#   ECS_TASK_FAMILY: brain-tumor-inference-task
-#   CONTAINER_NAME: brain-tumor-container
-#   NEW_REVISION: ""
+env:
+  ECS_CLUSTER: brain-tumor-cluster
+  ECS_SERVICE: brain-tumor-service
+  ECS_TASK_FAMILY: brain-tumor-inference-task
+  CONTAINER_NAME: brain-tumor-container
+  NEW_REVISION: ""
 
-# jobs:
-#   deploy:
-#     runs-on: ubuntu-latest
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment paused
+        run: echo "Deploy pipeline is paused. Uncomment steps below and change trigger to push to re-enable."
 
-#     steps:
-#       - name: 1. Checkout
-#         uses: actions/checkout@v4
+      # To re-enable full deployment, uncomment all steps below and change 'on' trigger to push.
+      # - name: 1. Checkout
+      #   uses: actions/checkout@v4
 
 #       - name: 2. Configure AWS credentials
 #         uses: aws-actions/configure-aws-credentials@v4
