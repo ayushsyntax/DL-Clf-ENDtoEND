@@ -132,3 +132,19 @@ def build_model(hyperparameters: keras_tuner.HyperParameters) -> keras.Model:
     )
 
     return model
+
+
+def build_efficientnet_v2_s() -> keras.Model:
+    """
+    Helper function for tests and default instantiation.
+    Creates a basic version of the model with default hyperparameters.
+    """
+    hp = keras_tuner.HyperParameters()
+    hp.Fixed("learning_rate", settings.INITIAL_LEARNING_RATE)
+    hp.Fixed("dropout_rate", settings.DROPOUT_RATE)
+    hp.Fixed("dense_units", 256)
+    hp.Fixed("l2_reg", 1e-4)
+    hp.Fixed("unfreeze_layers", 0)
+
+    model = build_model(hp)
+    return model
