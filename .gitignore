@@ -4,9 +4,8 @@
 # Data
 data/
 mlruns/
-.dvc/
 
-# Artifacts (keep .gitkeep only)
+# Artifacts (keep .gitkeep and docs images only)
 artifacts/
 !artifacts/.gitkeep
 
@@ -14,8 +13,6 @@ artifacts/
 *.h5
 *.weights.h5
 *.keras
-artifacts/tuner/
-artifacts/eval/
 
 # Python
 __pycache__/
@@ -23,14 +20,15 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv_wsl/
-venv_deploy/
-.env
+venv*/
 brain_tumor_mri_classifier.egg-info/
-data.dvc
 
 # OS
 .DS_Store
 Thumbs.db
+Screenshot*.png
+
+# Tools
 .pytest_cache
 .gitattributes
+.dvc/

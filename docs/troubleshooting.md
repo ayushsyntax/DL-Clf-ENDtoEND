@@ -1,32 +1,73 @@
-# 🛠️ Real-World Troubleshooting (Hard-Earned Lessons)
+# Troubleshooting
 
-This section isn't just theory—it's a collection of the actual "gotchas" we hit while building this end-to-end pipeline in WSL2 and deploying to AWS.
-
-### 1. The "Where is my AWS CLI?" Mystery (WSL2 Pathing)
-**Symptom:** You run `aws configure` in WSL and it works, but later, your scripts can't find the `aws` command.
-**What happened:** We found that the system-installed AWS CLI and the one inside your specific `venv` can conflict.
-**Fix:** Always use the full path to the virtual environment binary if a direct call fails. Example: `~/venv_deploy/bin/aws ecs ...`.
-
-### 2. WSL2 Out-of-Memory (OOM) Death
-**Symptom:** Training starts, then the entire WSL terminal just... disappears or prints "Killed".
-**What happened:** TensorFlow's default `tf.data` behavior tried to cache everything in RAM. WSL2 by default has a memory cap set by Windows.
-**Fix:** We explicitly disabled the `.cache()` step in `preprocessing.py` and set `configure_gpu_memory()` to use incremental growth instead of grabbing the whole 4GB of a GTX 1650 immediately.
-
-### 3. Docker "Pipe/Daemon" Connection Errors
-**Symptom:** `docker ps` or `docker build` fails with "The system cannot find the file specified" or "open //./pipe/dockerDesktopLinuxEngine".
-**What happened:** This is usually because Docker Desktop's WSL2 integration isn't toggled ON for your specific distribution, or the Docker Desktop app itself isn't running in Windows.
-**Real Solution:** Check Docker Desktop Settings → Resources → WSL Integration. Ensure your distro is checked. If it still fails, restart Docker Desktop.
-
-### 4. The ECR "Image Not Found" Deployment Loop
-**Symptom:** ECS deployment shows "PRIMARY" but the task keeps stopping with `CannotPullContainerError`.
-**What happened:** This usually happens if the GitHub Action tries to deploy before the Docker image is fully pushed/tagged in ECR.
-**Fix:** Our `deploy.yml` now uses `aws ecs wait services-stable` to ensure AWS actually sees and stabilizes the target image before we consider it a success.
-
-### 5. Kaggle API Key Environment Drift
-**Symptom:** `kaggle.api.authenticate()` fails even after setting the API key.
-**What happened:** The Kaggle library looks for `~/.kaggle/kaggle.json`. When running in headless scripts, it sometimes misses standard environment variables.
-**Fix:** In `data_ingestion.py`, we manually inject `os.environ['KAGGLE_USERNAME']` BEFORE importing the Kaggle API to ensure it binds correctly.
+Documented solutions for issues encountered during development and deployment of this system.
 
 ---
-> [!TIP]
-> If all else fails, check the structured logs! We use `structlog` (JSON output) in `src/common/logging.py` so you can pipe the output to a file and actually see what the inference engine is thinking.
+
+### WSL2 Out-of-Memory During Training
+
+**Symptom**: Training process is killed, or the WSL2 terminal terminates without warning.
+
+**Root cause**: TensorFlow's `tf.data.Dataset.cache()` loads the entire dataset into RAM. WSL2 has a default memory cap configured by Windows.
+
+**Resolution**: The `.cache()` call was removed from `preprocessing.py`. The pipeline uses `prefetch(AUTOTUNE)` without in-memory caching. GPU memory growth is set to incremental via `tensorflow.config.experimental.set_memory_growth()` in `build_model.py`.
+
+---
+
+### AWS CLI Not Found in WSL Virtual Environment
+
+**Symptom**: `aws` commands fail with "command not found" despite successful `pip install awscli`.
+
+**Root cause**: The virtual environment's `bin/` directory is not in the PATH, or a system-level AWS CLI conflicts with the venv installation.
+
+**Resolution**: Use the full path to the venv binary: `~/venv_deploy/bin/aws ecs ...`. Alternatively, ensure the virtual environment is activated before running any AWS commands.
+
+---
+
+### Docker Daemon Connection Failure in WSL2
+
+**Symptom**: `docker ps` or `docker build` fails with "Cannot connect to the Docker daemon" or pipe errors.
+
+**Root cause**: Docker Desktop's WSL2 integration is not enabled for the active distribution, or Docker Desktop is not running.
+
+**Resolution**: Open Docker Desktop, navigate to Settings > Resources > WSL Integration, and enable the toggle for your Ubuntu distribution. Restart Docker Desktop if the issue persists.
+
+---
+
+### ECS Task Fails with CannotPullContainerError
+
+**Symptom**: ECS service shows tasks cycling in PENDING/STOPPED states. Logs show `CannotPullContainerError`.
+
+**Root cause**: The Docker image was not fully pushed to ECR before the ECS service update was triggered, or the task definition references an incorrect image URI.
+
+**Resolution**: The `deploy.yml` workflow now includes `aws ecs wait services-stable` after `update-service` to ensure the image is available and the task is healthy before marking the deployment as successful.
+
+---
+
+### Kaggle API Authentication Failure
+
+**Symptom**: `kaggle.api.authenticate()` raises an authentication error even with credentials in `.env`.
+
+**Root cause**: The Kaggle library reads from `~/.kaggle/kaggle.json` by default and may not pick up environment variables set after import.
+
+**Resolution**: In `data_ingestion.py`, the `os.environ["KAGGLE_USERNAME"]` and `os.environ["KAGGLE_KEY"]` assignments are placed before the `from kaggle.api.kaggle_api_extended import KaggleApi` import statement to ensure the library binds correctly at import time.
+
+---
+
+### Model Inference Returns 503 on ECS
+
+**Symptom**: The `/predict` endpoint returns `{"detail": "Model not loaded"}` with HTTP 503.
+
+**Root cause**: The model file was not downloaded from S3 during container startup. This can occur if S3 permissions are missing or the bucket/key path is incorrect.
+
+**Resolution**: Verify that the ECS task execution role has `s3:GetObject` permission on the configured bucket. Check that `AWS_S3_BUCKET` and `MODEL_S3_KEY` in the configuration match the actual S3 path. The `InferencePipeline` in `infer.py` logs the specific S3 error on failure.
+
+---
+
+### Structured Logging Not Producing JSON
+
+**Symptom**: Logs appear as plain text instead of structured JSON in CloudWatch.
+
+**Root cause**: `structlog` detects an interactive terminal (`sys.stderr.isatty()`) and uses `ConsoleRenderer` instead of `JSONRenderer`.
+
+**Resolution**: In containerized environments (ECS), `stderr` is not a TTY, so JSON output is used automatically. For local debugging in JSON format, set `TERM=dumb` before running the application.

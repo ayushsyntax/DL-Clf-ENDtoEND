@@ -1,9 +1,31 @@
 graph TD
-    A[Dataset Download] --> B[Data Pipeline: Ingestion/Validation/Preprocessing]
-    B --> C[Training Pipeline: Build Model/Train/Tune/Eval/MLflow]
-    C --> D[S3 Model Registry]
-    D --> E[Inference Pipeline: Load/Predict]
-    E --> F[FastAPI API: /predict /health]
-    E --> G[Streamlit App: Local UI]
-    H[GitHub Actions CI/CD] --> I[Test/Lint/Build/Push ECR/Deploy ECS]
-    F --> J[ECS Fargate + ALB]
+    A["Kaggle MRI Dataset<br/>(7,023 images x 4 classes)"] --> B["Data Pipeline"]
+    B --> B1["DataIngestion: Kaggle API download"]
+    B1 --> B2["DataValidator: 4-class to binary mapping"]
+    B2 --> B3["Preprocessing: tf.data + augmentation"]
+
+    B3 --> C["Training Pipeline"]
+    C --> C1["KerasTuner BayesianOptimization<br/>(10 trials, val_auc objective)"]
+    C1 --> C2["EfficientNetV2-S + custom head<br/>(mixed_float16 precision)"]
+    C2 --> C3["Fine-tuning with EarlyStopping<br/>(20 epochs, restore_best_weights)"]
+    C3 --> C4["ModelEvaluator<br/>(threshold tuning, confusion matrix, report)"]
+
+    C4 --> D["MLflow Tracking Server"]
+    D --> D1["Trial params + val_auc logged per run"]
+    D --> D2["Final model + eval artifacts archived"]
+
+    C3 --> E["artifacts/best_model.keras"]
+    E --> F["upload_model.py --> AWS S3"]
+
+    F --> G["GitHub Actions CI/CD"]
+    G --> G1["Pull model from S3"]
+    G1 --> G2["Docker build (python:3.12-slim)"]
+    G2 --> G3["Push to AWS ECR"]
+    G3 --> G4["Update ECS Fargate service"]
+
+    G4 --> H["FastAPI (ECS Fargate)"]
+    H --> H1["GET /health"]
+    H --> H2["POST /predict"]
+
+    I["Streamlit Client (local)"] --> H2
+    H2 --> J["JSON: label, probability, class_idx"]
