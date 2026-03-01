@@ -24,12 +24,26 @@ The model is trained on the publicly available **Brain Tumor MRI Dataset**, cura
 
 | Property | Value |
 | :--- | :--- |
-| Total images | 7,200 |
+| Total images | 7,023 |
 | Raw classes | glioma, meningioma, pituitary, notumor |
 | Binary mapping | notumor = 0, all tumors = 1 |
-| Splits | Training / Testing (Kaggle native) |
-| Validation | 20% stratified sample of Training set |
-| Image format | JPEG, resized to 224x224x3 |
+| Image format | JPEG, resized to 224×224×3 |
+
+### Data Split Strategy
+
+The dataset is divided into **training**, **validation**, and **test** sets using a two-stage splitting approach implemented in `src/data_pipeline/preprocessing.py`:
+
+1. **Kaggle Native Split** — The raw dataset ships with pre-defined `Training/` and `Testing/` directories. These directories are detected automatically by `DataValidator` based on the filepath.
+2. **Validation Carve-Out** — 20% of the `Training/` images are randomly sampled to form the validation set using `pandas.DataFrame.sample(frac=0.2, random_state=42)`. The remaining 80% becomes the final training set.
+3. **Test Set** — The entire `Testing/` directory is used as the hold-out test set, kept completely untouched during training and hyperparameter tuning.
+
+| Split | Source | Approx. Images | Augmentation | Shuffled |
+| :--- | :--- | :---: | :---: | :---: |
+| **Training** | 80% of `Training/` folder | ~4,480 | ✅ Random flip, brightness, contrast | ✅ |
+| **Validation** | 20% of `Training/` folder | ~1,120 | ❌ | ❌ |
+| **Test** | Entire `Testing/` folder | ~1,600 | ❌ | ❌ |
+
+> **Reproducibility**: The validation split is deterministic — `random_state=42` ensures the same images are selected every run. Global seeds for `tensorflow`, `numpy`, and `random` (all set to 42) further guarantee reproducible data ordering.
 
 Data is version-controlled using DVC. The `data.dvc` pointer file tracks the exact dataset hash used for each training run.
 
