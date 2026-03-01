@@ -24,7 +24,7 @@ The model is trained on the publicly available **Brain Tumor MRI Dataset**, cura
 
 | Property | Value |
 | :--- | :--- |
-| Total images | 7,023 |
+| Total images | 7,200 |
 | Raw classes | glioma, meningioma, pituitary, notumor |
 | Binary mapping | notumor = 0, all tumors = 1 |
 | Splits | Training / Testing (Kaggle native) |
