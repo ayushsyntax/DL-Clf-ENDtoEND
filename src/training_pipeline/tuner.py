@@ -1,74 +1,63 @@
-"""
-Hyperparameter optimization via Bayesian search.
-Uses Keras Tuner to find optimal model settings.
-Implements early stopping for trial efficiency.
-"""
+"""Bayesian hyperparameter search over EfficientNetV2-S architecture space."""
+
+import random
 
 import keras_tuner
-import tensorflow
-import structlog
 import numpy
-import random
+import structlog
+import tensorflow
 
 tensorflow.random.set_seed(42)
 numpy.random.seed(42)
 random.seed(42)
 
-from src.training_pipeline.build_model import build_model
 from src.common.config import settings
+from src.training_pipeline.build_model import build_model
 
 logger = structlog.get_logger()
 
 
 def run_hyperparameter_search(
-    training_dataset: tensorflow.data.Dataset,
-    validation_dataset: tensorflow.data.Dataset,
+    train_ds: tensorflow.data.Dataset,
+    val_ds: tensorflow.data.Dataset,
     class_weights: dict[int, float]
 ) -> tuple[keras_tuner.HyperParameters, keras_tuner.Tuner]:
-    """Run a search to discover optimal architecture.
+    """
+    Run Bayesian Optimization over model hyperparameters.
 
     Args:
-        training_dataset (Dataset): Data to iterate on.
-        validation_dataset (Dataset): Data to monitor on.
-        class_weights (dict): Imbalance correction mapping.
+        train_ds: Training dataset.
+        val_ds: Validation dataset used as tuner objective.
+        class_weights: Inverse-frequency weights to handle label imbalance.
 
     Returns:
-        tuple[HyperParameters, Tuner]: Discovered best configuration and tuner object.
+        Best HyperParameters object and the fitted Tuner instance.
     """
-    logger.info("Initializing Bayesian Optimization loop")
-
-    objective_metric = keras_tuner.Objective("val_auc", direction="max")
-    tuner_directory = str(settings.ARTIFACTS_DIR / "tuner")
+    logger.info("Starting Bayesian hyperparameter search")
 
     tuner = keras_tuner.BayesianOptimization(
         build_model,
-        objective=objective_metric,
+        objective=keras_tuner.Objective("val_auc", direction="max"),
         max_trials=settings.TUNER_MAX_TRIALS,
         executions_per_trial=1,
-        directory=tuner_directory,
+        directory=str(settings.ARTIFACTS_DIR / "tuner"),
         project_name="mri_brain_tuner",
         overwrite=False
     )
 
-    stop_early_callback = tensorflow.keras.callbacks.EarlyStopping(
-        monitor="val_auc",
-        patience=settings.TUNER_PATIENCE,
-        mode="max"
-    )
-
     tuner.search(
-        training_dataset,
-        validation_data=validation_dataset,
+        train_ds,
+        validation_data=val_ds,
         class_weight=class_weights,
         epochs=settings.TUNER_EPOCHS,
-        callbacks=[stop_early_callback],
+        callbacks=[
+            tensorflow.keras.callbacks.EarlyStopping(
+                monitor="val_auc", patience=settings.TUNER_PATIENCE, mode="max"
+            )
+        ],
         verbose=1
     )
 
-    search_results = tuner.get_best_hyperparameters(num_trials=1)
-    best_discovered_hyperparameters = search_results[0]
-
-    logger.info("Best search parameters found",
-                best_values=best_discovered_hyperparameters.values)
-
-    return best_discovered_hyperparameters, tuner
+    best_hp = tuner.get_best_hyperparameters(num_trials=1)[0]
+    logger.info("Search complete", best=best_hp.values)
+    return best_hp, tuner

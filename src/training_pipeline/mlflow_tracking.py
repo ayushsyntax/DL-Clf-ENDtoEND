@@ -1,114 +1,54 @@
-"""
-MLflow tracking service for brain MRI classification.
-Archives data hash, trial parameters, and metric scores.
-Handles model serialization and artifact uploads.
-"""
+"""MLflow tracking service: logs params, metrics, model, and artifacts per trial."""
 
 import hashlib
 from pathlib import Path
+
 import mlflow
 import pandas
 import structlog
+
 from src.common.config import settings
 
 logger = structlog.get_logger()
 
 
 class TrackingService:
-    """Manage the connection to the MLflow tracking server.
-
-    Attributes:
-        BASE_DIR: Path reference.
-    """
+    """Wraps MLflow to track hyperparameter trials and final experiment results."""
 
     def __init__(self) -> None:
-        """Initialize server connection and target experiment."""
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
         mlflow.set_experiment(settings.MLFLOW_EXPERIMENT_NAME)
 
-    def generate_data_state_hash(self, dataframe: pandas.DataFrame) -> str:
-        """Create a fingerprint for dataset versioning.
+    def generate_data_state_hash(self, df: pandas.DataFrame) -> str:
+        """SHA-256 fingerprint of sorted filepaths — detects dataset drift between runs."""
+        combined = "".join(df["filepath"].sort_values().tolist())
+        return hashlib.sha256(combined.encode()).hexdigest()
 
-        Args:
-            dataframe (DataFrame): Dataset metadata.
+    def begin_tracking_session(self, name: str) -> mlflow.ActiveRun:
+        """Open a named MLflow run context."""
+        return mlflow.start_run(run_name=name)
 
-        Returns:
-            str: SHA-256 state hash.
-        """
-        sorted_filepaths = dataframe["filepath"].sort_values().tolist()
-        combined_string = "".join(sorted_filepaths)
-        data_hash = hashlib.sha256(combined_string.encode()).hexdigest()
-
-        return data_hash
-
-    def begin_tracking_session(self, trial_name: str) -> mlflow.ActiveRun:
-        """Enter a new experiment recording block.
-
-        Args:
-            trial_name (str): Label for the active run.
-
-        Returns:
-            ActiveRun: MLflow context object.
-        """
-        return mlflow.start_run(run_name=trial_name)
-
-    def log_trial_run(
-        self,
-        trial_id: str,
-        hyperparameters: dict,
-        val_auc: float
-    ) -> None:
-        """Log an individual hyperparameter tuning trial.
-
-        Args:
-            trial_id (str): Trial identifier.
-            hyperparameters (dict): Trial parameters.
-            val_auc (float): Validation AUC score.
-        """
-        with self.begin_tracking_session(f"trial_{trial_id}") as active_run:
+    def log_trial_run(self, trial_id: str, hyperparameters: dict, val_auc: float) -> None:
+        """Log a single tuner trial with its params and validation AUC."""
+        with self.begin_tracking_session(f"trial_{trial_id}") as run:
             mlflow.log_params(hyperparameters)
             mlflow.log_metric("val_auc", val_auc)
-            logger.info("Trial archived", run_id=active_run.info.run_id, trial_id=trial_id)
+            logger.info("Trial logged", run_id=run.info.run_id, trial_id=trial_id)
 
-    def log_experimental_metadata(
-        self,
-        df: pandas.DataFrame,
-        hyperparameters: dict
-    ) -> None:
-        """Trace data version and trial configurations.
-
-        Args:
-            df (DataFrame): Dataframe for hashing.
-            hyperparameters (dict): Hyperparameters for run.
-        """
-        current_data_hash = self.generate_data_state_hash(df)
-
-        mlflow.log_param("dataset_hash", current_data_hash)
-        mlflow.log_params(hyperparameters)
-
-        logger.info("Metadata cataloged in MLflow", hash=current_data_hash)
+    def log_experimental_metadata(self, df: pandas.DataFrame, params: dict) -> None:
+        """Log dataset hash + hyperparameters to the active run."""
+        mlflow.log_param("dataset_hash", self.generate_data_state_hash(df))
+        mlflow.log_params(params)
 
     def log_performance_metrics(self, metrics: dict) -> None:
-        """Push score mappings to the dashboard.
-
-        Args:
-            metrics (dict): Performance result map.
-        """
+        """Push evaluation metric dict to the active run dashboard."""
         mlflow.log_metrics(metrics)
 
-    def log_trained_model(self, model_instance: any) -> None:
-        """Archive weights and graph to server.
-
-        Args:
-            model_instance: The trained model.
-        """
-        mlflow.keras.log_model(model_instance, "brain_tumor_detector_model")
+    def log_trained_model(self, model) -> None:
+        """Serialize and archive model weights and graph to MLflow."""
+        mlflow.keras.log_model(model, "brain_tumor_detector_model")
 
     def upload_persistent_artifact(self, file_path: Path) -> None:
-        """Archive static result files to experiment history.
-
-        Args:
-            file_path (Path): System path to artifact.
-        """
+        """Attach a local file as a persistent artifact to the active run."""
         mlflow.log_artifact(str(file_path))
-        logger.info("Artifact upload complete", filename=file_path.name)
+        logger.info("Artifact uploaded", file=file_path.name)

@@ -2,5 +2,15 @@ model:
   path: artifacts/best_model.keras
   s3_key: models/best_model.keras
   input_size: [224, 224]
-  classes: [glioma, meningioma, notumor, pituitary]
+  classes: [notumor, tumor]
+  num_classes: 2
+  output_activation: sigmoid
   confidence_threshold: 0.5
+
+data:
+  raw_classes: [glioma, meningioma, notumor, pituitary]
+  label_mapping:
+    notumor: 0
+    glioma: 1
+    meningioma: 1
+    pituitary: 1

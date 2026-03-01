@@ -27,7 +27,10 @@ venv_wsl/
 venv_deploy/
 .env
 brain_tumor_mri_classifier.egg-info/
+data.dvc
 
 # OS
 .DS_Store
 Thumbs.db
+.pytest_cache
+.gitattributes

@@ -2,18 +2,42 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.venv
+
+.venv/
 venv/
+venv_wsl/
+venv_deploy/
 env/
+
 .env
+.env.*
+
 data/
-# artifacts/
 mlruns/
+artifacts/
+*.keras
+*.h5
+*.weights.h5
+
 .pytest_cache/
 .mypy_cache/
 .coverage
 htmlcov/
-# *.keras
-# *.h5
+
 .ipynb_checkpoints/
 keras_tuner/
+
+brain_tumor_mri_classifier.egg-info/
+
+.git/
+.github/
+.gitignore
+
+.DS_Store
+.vscode/
+.idea/
+
+README.md
+docs/
+notebooks/
+tests/

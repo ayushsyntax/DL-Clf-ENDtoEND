@@ -1,170 +1,96 @@
-"""
-Evaluation module for classification performance.
-Computes matrices and scores on test data.
-Persists reports to the local file system.
-"""
+"""Evaluation suite: threshold tuning, metrics, confusion matrix, and JSON reports."""
 
 import json
 from pathlib import Path
-import tensorflow
+
 import numpy
 import structlog
-from sklearn.metrics import classification_report
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import precision_recall_curve
-from sklearn.metrics import ConfusionMatrixDisplay
+import tensorflow
+from sklearn.metrics import (
+    classification_report, confusion_matrix,
+    roc_auc_score, precision_recall_curve, ConfusionMatrixDisplay
+)
+
 from src.common.config import settings
 
 logger = structlog.get_logger()
 
 
 class ModelEvaluator:
-    """Audit performance of trained classifier models.
-
-    Attributes:
-        model (Model): Trained instance of the classifier.
-    """
+    """Compute and persist full evaluation metrics for the trained binary classifier."""
 
     def __init__(self, trained_model: tensorflow.keras.Model) -> None:
-        """Initialize evaluator with trained model and artifacts.
-
-        Args:
-            trained_model: The model to analyze.
-        """
         self.model = trained_model
-        self.output_directory = settings.EVAL_ARTIFACTS_DIR
-        self.output_directory.mkdir(parents=True, exist_ok=True)
+        self.output_dir = settings.EVAL_ARTIFACTS_DIR
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def run_evaluation_suite(
-        self,
-        testing_dataset: tensorflow.data.Dataset
-    ) -> dict[str, float]:
-        """Perform full performance analysis.
-
-        Args:
-            testing_dataset (Dataset): Data to test against.
+    def run_evaluation_suite(self, test_ds: tensorflow.data.Dataset) -> dict[str, float]:
+        """
+        Run full evaluation: AUC, accuracy, precision, recall, optimal threshold.
 
         Returns:
-            dict[str, float]: Summary of metric scores.
+            Summary metrics dict logged to MLflow and saved as metrics.json.
         """
-        logger.info("Executing test evaluation")
-        ground_truth_labels = []
-        probability_predictions = []
+        logger.info("Running evaluation")
+        y_true, y_scores = [], []
 
-        for images, labels in testing_dataset:
-            batch_predictions = self.model.predict(images, verbose=0).flatten()
-            ground_truth_labels.extend(labels.numpy())
-            probability_predictions.extend(batch_predictions)
+        for images, labels in test_ds:
+            y_scores.extend(self.model.predict(images, verbose=0).flatten())
+            y_true.extend(labels.numpy())
 
-        y_true = numpy.array(ground_truth_labels)
-        y_scores = numpy.array(probability_predictions)
+        y_true = numpy.array(y_true)
+        y_scores = numpy.array(y_scores)
 
-        best_thresh, best_recall, best_f1 = self._compute_optimal_threshold(y_true, y_scores)
+        best_thresh, best_recall, best_f1 = self._optimal_threshold(y_true, y_scores)
+        y_pred = (y_scores >= best_thresh).astype(int)
 
-        y_binary = (y_scores >= best_thresh).astype(int)
-
-        confusion_result = confusion_matrix(y_true, y_binary).tolist()
-        detailed_class_report = classification_report(y_true, y_binary, output_dict=True)
-        area_under_curve = roc_auc_score(y_true, y_scores)
-
-        summary_metrics = {
-            "auc": float(area_under_curve),
-            "accuracy": float(detailed_class_report["accuracy"]),
-            "precision": float(detailed_class_report["1"]["precision"]),
-            "recall": float(detailed_class_report["1"]["recall"]),
+        report = classification_report(y_true, y_pred, output_dict=True)
+        metrics = {
+            "auc": float(roc_auc_score(y_true, y_scores)),
+            "accuracy": float(report["accuracy"]),
+            "precision": float(report["1"]["precision"]),
+            "recall": float(report["1"]["recall"]),
             "best_threshold": best_thresh,
-            "test_recall_at_best_thresh": best_recall,
-            "test_f1_at_best_thresh": best_f1
+            "best_recall": best_recall,
+            "best_f1": best_f1
         }
 
-        self._persist_evaluation_artifacts(confusion_result, detailed_class_report, summary_metrics)
-        self._plot_confusion_matrix(y_true, y_binary)
+        self._save_artifacts(confusion_matrix(y_true, y_pred).tolist(), report, metrics)
+        self._plot_confusion_matrix(y_true, y_pred)
+        logger.info("Evaluation complete", metrics=metrics)
+        return metrics
 
-        logger.info("Evaluation results summarized", scores=summary_metrics)
-        return summary_metrics
-
-    def _compute_optimal_threshold(
-        self,
-        y_true: numpy.ndarray,
-        y_scores: numpy.ndarray
+    def _optimal_threshold(
+        self, y_true: numpy.ndarray, y_scores: numpy.ndarray
     ) -> tuple[float, float, float]:
-        """Find the decision threshold that maximizes F1 score.
-
-        Args:
-            y_true (ndarray): Ground truth labels.
-            y_scores (ndarray): Predicted probabilities.
-
-        Returns:
-            tuple[float, float, float]: Best threshold, recall, and F1.
-        """
+        """Find threshold that maximises F1 via precision-recall curve."""
         prec, rec, thresh = precision_recall_curve(y_true, y_scores)
-        f1_scores = 2 * prec * rec / (prec + rec + 1e-8)
+        f1 = 2 * prec * rec / (prec + rec + 1e-8)
+        idx = int(numpy.argmax(f1))
+        best = float(thresh[min(idx, len(thresh) - 1)])
+        logger.info("Optimal threshold", threshold=best, f1=float(f1[idx]))
+        return best, float(rec[idx]), float(f1[idx])
 
-        best_idx = int(numpy.argmax(f1_scores))
-        best_thresh = float(thresh[min(best_idx, len(thresh) - 1)])
-        best_recall = float(rec[best_idx])
-        best_f1 = float(f1_scores[best_idx])
-
-        logger.info(
-            "threshold_tuned",
-            threshold=best_thresh,
-            recall=best_recall,
-            f1=best_f1
-        )
-        return best_thresh, best_recall, best_f1
-
-    def _plot_confusion_matrix(
-        self,
-        y_true: numpy.ndarray,
-        y_binary: numpy.ndarray
-    ) -> None:
-        """Create and save confusion matrix visualization.
-
-        Args:
-            y_true (ndarray): Ground truth labels.
-            y_binary (ndarray): Binarized predictions.
-        """
+    def _plot_confusion_matrix(self, y_true: numpy.ndarray, y_pred: numpy.ndarray) -> None:
+        """Save confusion matrix PNG to artifacts/plots/."""
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-
-        plot_directory = settings.ARTIFACTS_DIR / "plots"
-        plot_directory.mkdir(parents=True, exist_ok=True)
-
+        plot_dir = settings.ARTIFACTS_DIR / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
         ConfusionMatrixDisplay.from_predictions(
-            y_true,
-            y_binary,
-            display_labels=["No Tumor", "Tumor"]
+            y_true, y_pred, display_labels=["No Tumor", "Tumor"]
         ).plot()
-
-        plt.savefig(plot_directory / "cm.png")
+        plt.savefig(plot_dir / "cm.png")
         plt.close()
 
-    def _persist_evaluation_artifacts(
-        self,
-        confusion_data: list,
-        report_data: dict,
-        metrics_data: dict
-    ) -> None:
-        """Save raw results as JSON to disk.
-
-        Args:
-            confusion_data (list): Matrix data.
-            report_data (dict): Mapping to labels and scores.
-            metrics_data (dict): Overall performance metrics.
-        """
-        matrix_file_path = self.output_directory / "confusion_matrix.json"
-        report_file_path = self.output_directory / "report.json"
-        metrics_file_path = settings.ARTIFACTS_DIR / "metrics.json"
-
-        with open(matrix_file_path, "w") as file:
-            json.dump(confusion_data, file, indent=4)
-
-        with open(report_file_path, "w") as file:
-            json.dump(report_data, file, indent=4)
-
-        with open(metrics_file_path, "w") as file:
-            json.dump(metrics_data, file, indent=4)
-
-        logger.info("Saved reports", directory=str(self.output_directory))
+    def _save_artifacts(self, cm: list, report: dict, metrics: dict) -> None:
+        """Persist confusion matrix, classification report, and metrics as JSON."""
+        for path, data in [
+            (self.output_dir / "confusion_matrix.json", cm),
+            (self.output_dir / "report.json", report),
+            (settings.ARTIFACTS_DIR / "metrics.json", metrics)
+        ]:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=4)
+        logger.info("Evaluation artifacts saved", dir=str(self.output_dir))

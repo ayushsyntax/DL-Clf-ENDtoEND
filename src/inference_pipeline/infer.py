@@ -48,7 +48,7 @@ class InferencePipeline:
             Exception: If AWS credentials or network connectivity fail.
         """
         try:
-            s3_client = boto3.client('s3')
+            s3_client = boto3.client("s3")
             Path(self.model_path).parent.mkdir(parents=True, exist_ok=True)
             s3_client.download_file(
                 settings.AWS_S3_BUCKET,
@@ -62,7 +62,8 @@ class InferencePipeline:
 
     def preprocess_image(self, raw_image_bytes: bytes) -> tf.Tensor:
         """
-        Converts raw image bytes into a normalized tensor batch.
+        Converts raw image bytes into a preprocessed tensor batch.
+        Uses EfficientNetV2 preprocessing to match training pipeline exactly.
 
         Args:
             raw_image_bytes (bytes): Binary content of the uploaded image.
@@ -70,29 +71,30 @@ class InferencePipeline:
         Returns:
             tf.Tensor: A tensor of shape (1, 224, 224, 3) ready for prediction.
         """
-        decoded_image = tf.io.decode_image(raw_image_bytes, channels=settings.CHANNELS)
+        decoded_image = tf.io.decode_image(raw_image_bytes, channels=3)
         resized_image = tf.image.resize(decoded_image, [settings.IMAGE_SIZE, settings.IMAGE_SIZE])
-        normalized_image = tf.cast(resized_image, tf.float32) / 255.0
-        return tf.expand_dims(normalized_image, axis=0)
+        preprocessed = tf.keras.applications.efficientnet_v2.preprocess_input(
+            tf.cast(resized_image, tf.float32)
+        )
+        return tf.expand_dims(preprocessed, axis=0)
 
     def predict(self, raw_image_bytes: bytes) -> dict:
         """
-        Performs logic to classify an MRI scan from binary data.
+        Performs binary classification of an MRI scan.
 
         Args:
             raw_image_bytes (bytes): Binary content of the image.
 
         Returns:
-            dict: Classification results including label and confidence score.
+            dict: Classification results including label, probability, class_idx.
         """
-        input_data = self.preprocess_image(raw_image_bytes)
-        raw_prediction = self.model.predict(input_data, verbose=0)[0][0]
+        input_tensor = self.preprocess_image(raw_image_bytes)
+        raw_prediction = self.model.predict(input_tensor, verbose=0)[0][0]
         confidence_score = float(raw_prediction)
-
-        predicted_label = "Tumor" if confidence_score > settings.CONFIDENCE_THRESHOLD else "No Tumor"
+        is_tumor = confidence_score > settings.CONFIDENCE_THRESHOLD
 
         return {
-            "label": predicted_label,
-            "probability": confidence_score,
-            "class_idx": 1 if confidence_score > settings.CONFIDENCE_THRESHOLD else 0
+            "label": "Tumor" if is_tumor else "No Tumor",
+            "probability": round(confidence_score, 4),
+            "class_idx": 1 if is_tumor else 0
         }

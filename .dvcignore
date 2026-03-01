@@ -1,3 +1,45 @@
-# Add patterns of files dvc should ignore, which could improve
-# the performance. Learn more at
-# https://dvc.org/doc/user-guide/dvcignore
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv*/
+env/
+
+# Local secrets and environment
+.env
+.env.*
+
+# Local development artifacts
+data/
+mlruns/
+artifacts/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+keras_tuner/
+
+# IDE and OS
+.DS_Store
+.vscode/
+.idea/
+*.egg-info/
+
+# Git metadata
+.git/
+.github/
+
+# Tests and docs (not tracked)
+tests/
+docs/
+notebooks/
+README.md
+
+# Large generated files
+*.keras
+*.h5
+*.weights.h5

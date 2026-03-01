@@ -1,8 +1,4 @@
-"""
-Model architecture for brain tumor classification.
-Uses EfficientNetV2-S as a feature extraction base.
-Implements hardware optimizations for memory and precision.
-"""
+"""EfficientNetV2-S binary classifier with hardware-aware GPU and precision setup."""
 
 import keras
 import keras_tuner
@@ -14,114 +10,71 @@ logger = structlog.get_logger()
 
 
 def configure_gpu_memory() -> None:
-    """Enable incremental memory allocation for GPUs.
-
-    Prevents TensorFlow from taking all VRAM immediately.
-    """
-    physical_gpus = tensorflow.config.list_physical_devices("GPU")
-    for gpu_device in physical_gpus:
+    """Enable incremental VRAM allocation to prevent OOM on limited hardware."""
+    for gpu in tensorflow.config.list_physical_devices("GPU"):
         try:
-            tensorflow.config.experimental.set_memory_growth(gpu_device, True)
+            tensorflow.config.experimental.set_memory_growth(gpu, True)
         except RuntimeError:
             pass
-
-    if physical_gpus:
-        logger.info("GPU hardware found and memory growth enabled")
+    if tensorflow.config.list_physical_devices("GPU"):
+        logger.info("GPU memory growth enabled")
 
 
 def set_precision_policy() -> None:
-    """Set global precision policy based on hardware.
-
-    Uses mixed float16 on GPU to double training speed.
-    """
+    """Use mixed float16 on GPU to halve memory usage and double throughput."""
     keras.mixed_precision.set_global_policy("mixed_float16")
     logger.info("Precision policy set to mixed_float16")
 
 
 def create_efficientnet_base(unfreeze_layers: int) -> keras.Model:
-    """Create a pretrained feature extractor with partial unfreezing.
+    """
+    Load pretrained EfficientNetV2-S and freeze all but the top N layers.
 
     Args:
-        unfreeze_layers (int): Number of top layers to remain trainable.
-
-    Returns:
-        Model: Configured feature extractor base.
+        unfreeze_layers: Number of top layers to keep trainable (0 = fully frozen).
     """
     image_shape = (settings.IMAGE_SIZE, settings.IMAGE_SIZE, settings.CHANNELS)
-
-    base_model = keras.applications.EfficientNetV2S(
-        include_top=False,
-        weights="imagenet",
-        input_shape=image_shape
+    base = keras.applications.EfficientNetV2S(
+        include_top=False, weights="imagenet", input_shape=image_shape
     )
-
-    base_model.trainable = True
-
-    if unfreeze_layers == 0:
-        base_model.trainable = False
-        return base_model
-
-    total_layer_count = len(base_model.layers)
-    freeze_until_index = total_layer_count - unfreeze_layers
-
-    for layer in base_model.layers[:freeze_until_index]:
-        layer.trainable = False
-
-    return base_model
+    base.trainable = unfreeze_layers > 0
+    if unfreeze_layers > 0:
+        for layer in base.layers[:len(base.layers) - unfreeze_layers]:
+            layer.trainable = False
+    return base
 
 
 def build_model(hyperparameters: keras_tuner.HyperParameters) -> keras.Model:
-    """Construct and compile the binary classification model.
+    """
+    Construct and compile the binary MRI classification model.
 
     Args:
-        hyperparameters (HyperParameters): Tunable trial values.
+        hyperparameters: Keras Tuner trial values for LR, dropout, dense units, etc.
 
     Returns:
-        Model: Compiled Keras model instance.
+        Compiled Keras model with sigmoid output and AUC primary metric.
     """
     configure_gpu_memory()
     set_precision_policy()
 
     image_shape = (settings.IMAGE_SIZE, settings.IMAGE_SIZE, settings.CHANNELS)
-
-    learning_rate = hyperparameters.Float(
-        "learning_rate",
-        min_value=1e-5, max_value=1e-2, sampling="log"
-    )
-    dropout_rate = hyperparameters.Float(
-        "dropout_rate",
-        min_value=0.2, max_value=0.7, step=0.1
-    )
-    dense_units = hyperparameters.Int(
-        "dense_units",
-        min_value=128, max_value=512, step=128
-    )
-    l2_regularization = hyperparameters.Float(
-        "l2_reg",
-        min_value=1e-5, max_value=1e-2, sampling="log"
-    )
-    unfreeze_layers = hyperparameters.Int(
-        "unfreeze_layers",
-        min_value=0, max_value=20, step=5
-    )
-
-    base_model = create_efficientnet_base(unfreeze_layers)
+    lr = hyperparameters.Float("learning_rate", 1e-5, 1e-2, sampling="log")
+    dropout = hyperparameters.Float("dropout_rate", 0.2, 0.7, step=0.1)
+    units = hyperparameters.Int("dense_units", 128, 512, step=128)
+    l2 = hyperparameters.Float("l2_reg", 1e-5, 1e-2, sampling="log")
+    unfreeze = hyperparameters.Int("unfreeze_layers", 0, 20, step=5)
 
     model = keras.Sequential([
         keras.layers.Input(shape=image_shape),
-        base_model,
+        create_efficientnet_base(unfreeze),
         keras.layers.GlobalAveragePooling2D(),
-        keras.layers.Dense(
-            dense_units,
-            activation="relu",
-            kernel_regularizer=keras.regularizers.l2(l2_regularization)
-        ),
-        keras.layers.Dropout(dropout_rate),
+        keras.layers.Dense(units, activation="relu", kernel_regularizer=keras.regularizers.l2(l)),
+        keras.layers.Dropout(dropout),
         keras.layers.Dense(1, activation="sigmoid", dtype="float32")
     ])
 
     model.compile(
-        optimizer=keras.optimizers.AdamW(learning_rate=learning_rate),
+        optimizer=keras.optimizers.AdamW(learning_rate=lr),
         loss=keras.losses.BinaryCrossentropy(label_smoothing=settings.LABEL_SMOOTHING),
         metrics=[
             keras.metrics.AUC(name="auc"),
@@ -130,21 +83,4 @@ def build_model(hyperparameters: keras_tuner.HyperParameters) -> keras.Model:
             keras.metrics.Recall(name="recall")
         ]
     )
-
-    return model
-
-
-def build_efficientnet_v2_s() -> keras.Model:
-    """
-    Helper function for tests and default instantiation.
-    Creates a basic version of the model with default hyperparameters.
-    """
-    hp = keras_tuner.HyperParameters()
-    hp.Fixed("learning_rate", settings.INITIAL_LEARNING_RATE)
-    hp.Fixed("dropout_rate", settings.DROPOUT_RATE)
-    hp.Fixed("dense_units", 256)
-    hp.Fixed("l2_reg", 1e-4)
-    hp.Fixed("unfreeze_layers", 0)
-
-    model = build_model(hp)
     return model

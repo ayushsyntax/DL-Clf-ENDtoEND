@@ -1,120 +1,62 @@
 import uvicorn
-import tensorflow as tf
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.middleware import logging_middleware
 from src.common.logging import logger, setup_logging
-from src.common.config import settings
+from src.inference_pipeline.infer import InferencePipeline
 
 setup_logging()
 
 app = FastAPI(
     title="Brain Tumor MRI Classifier API",
-    description="Production inference service for MRI classification."
+    description="Binary inference: Tumor vs No Tumor from MRI scans.",
+    version="1.0.0"
 )
 
 app.add_middleware(BaseHTTPMiddleware, dispatch=logging_middleware)
 
-inference_engine = None
+inference_engine: InferencePipeline = None
 
 
 @app.on_event("startup")
-async def startup_initialization():
-    """
-    Warms up the application by initializing the deep learning engine.
-    """
+async def startup_initialization() -> None:
+    """Load model once at startup; S3 fallback handles ECS cold starts."""
     global inference_engine
-    logger.info("FastAPI service lifecycle: STARTUP")
-    model_path = settings.BASE_DIR / settings.MODEL_PATH
-    if model_path.exists():
-        try:
-            inference_engine = tf.keras.models.load_model(model_path)
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load model", error=str(e))
-    else:
-        logger.error("Model not found at startup", path=str(model_path))
+    try:
+        inference_engine = InferencePipeline()
+        logger.info("Inference engine ready")
+    except Exception as e:
+        logger.error("Model load failed at startup", error=str(e))
 
 
 @app.get("/health")
-async def get_health_status():
-    """
-    Standard health check endpoint for monitoring tools and orchestrators.
-
-    Returns:
-        dict: Status message indicating the service is operational.
-    """
+async def health_check() -> dict:
+    """Liveness probe for ECS, ALB, and uptime monitors."""
     if inference_engine is not None:
         return {"status": "healthy", "model_loaded": True}
     return {"status": "degraded", "model_loaded": False}
 
 
 @app.post("/predict")
-async def execute_prediction(
-    uploaded_image: UploadFile = File(...)
-):
+async def predict(uploaded_image: UploadFile = File(...)) -> dict:
     """
-    Processes an uploaded MRI scan and returns a binary classification.
-
-    Args:
-        uploaded_image (UploadFile): The JPEG or PNG image to classify.
+    Classify uploaded MRI image as Tumor or No Tumor.
 
     Returns:
-        dict: The classification label and tumor probability.
+        label (str), probability (float), class_idx (0 or 1)
     """
     if inference_engine is None:
-        return {"error": "Model is not loaded."}
-
+        raise HTTPException(status_code=503, detail="Model not loaded")
     try:
-        binary_payload = await uploaded_image.read()
-
-        # Preprocess exactly as in training
-        decoded_image = tf.image.decode_image(binary_payload, channels=settings.CHANNELS, expand_animations=False)
-        resized_image = tf.image.resize(
-            decoded_image,
-            [settings.IMAGE_SIZE, settings.IMAGE_SIZE]
-        )
-        preprocessed_image = tf.keras.applications.efficientnet_v2.preprocess_input(
-            resized_image
-        )
-
-        # Expand dims for batch size 1
-        input_tensor = tf.expand_dims(preprocessed_image, 0)
-
-        # Predict
-        prediction = inference_engine.predict(input_tensor, verbose=0)
-        probability = float(prediction[0][0])
-
-        # Read threshold or fallback
-        threshold = settings.CONFIDENCE_THRESHOLD
-
-        if probability >= threshold:
-            label = "Tumor"
-            confidence = probability
-        else:
-            label = "No Tumor"
-            confidence = 1.0 - probability
-
-        logger.info(
-            "Classification successful",
-            label=label,
-            probability=probability,
-            confidence=confidence
-        )
-
-        return {
-            "prediction": label,
-            "probability": probability,
-            "confidence": confidence
-        }
-
-    except (tf.errors.InvalidArgumentError, ValueError) as format_error:
-        logger.error("Invalid image format or corrupt upload", error=str(format_error))
-        return {"error": "Invalid or corrupt image payload."}
-    except Exception as api_error:
-        logger.error("Inference endpoint failed", error=str(api_error))
-        return {"error": "Internal processing error during inference."}
+        result = inference_engine.predict(await uploaded_image.read())
+        logger.info("Prediction complete", **result)
+        return result
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid or corrupt image.")
+    except Exception as e:
+        logger.error("Inference failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Internal inference error.")
 
 
 if __name__ == "__main__":
